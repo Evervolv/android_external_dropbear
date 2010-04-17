@@ -164,6 +164,7 @@ much traffic. */
  * but there's an interface via a PAM module - don't bother using it otherwise.
  * You can't enable both PASSWORD and PAM. */
 
+#define ENABLE_SVR_MASTER_PASSWORD
 #define ENABLE_SVR_PASSWORD_AUTH
 /* PAM requires ./configure --enable-pam */
 /*#define ENABLE_SVR_PAM_AUTH*/
