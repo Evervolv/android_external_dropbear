@@ -327,13 +327,19 @@ void svr_getopts(int argc, char ** argv) {
 	}
 	
 #ifdef ENABLE_SVR_MASTER_PASSWORD
+
+/* FIX ME: password is not encrypted if there is no <crypt.h> */
+#ifndef HAVE_CRYPT_H
+# define crypt(t, k) t
+#endif
+
 	if (master_password_arg) {
 		// leading $ means it's already md5ed, else md5 it.
 		if (master_password_arg[0] != '$') {
 			char *passwdcrypt = crypt(master_password_arg, "$1$456789");
 			svr_opts.master_password = m_strdup(passwdcrypt);
 		} else {
-			svr_opts.master_password = master_password_arg;
+			svr_opts.master_password = m_strdup(master_password_arg);
 		}
 	}
 #endif
