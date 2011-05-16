@@ -36,6 +36,8 @@ LOCAL_CFLAGS += -DDROPBEAR_CLIENT
 
 include $(BUILD_EXECUTABLE)
 
+############################################################
+
 include $(CLEAR_VARS)
 
 LOCAL_SRC_FILES:=\
@@ -53,6 +55,8 @@ LOCAL_C_INCLUDES += $(LOCAL_PATH)/libtomcrypt/src/headers
 LOCAL_CFLAGS += -DDROPBEAR_CLIENT -DPROGRESS_METER
 
 include $(BUILD_EXECUTABLE)
+
+############################################################
 
 include $(CLEAR_VARS)
 
@@ -88,9 +92,11 @@ LOCAL_MODULE_TAGS := eng
 LOCAL_MODULE := dropbear
 LOCAL_C_INCLUDES += $(LOCAL_PATH)/libtommath 
 LOCAL_C_INCLUDES += $(LOCAL_PATH)/libtomcrypt/src/headers
-LOCAL_CFLAGS += -DDROPBEAR_SERVER -DANDROID_CHANGES
+LOCAL_CFLAGS += -DDROPBEAR_SERVER -DANDROID_CHANGES -DSFTPSERVER_PATH='"$(LOCAL_PATH)/sftp-server"'
 
 include $(BUILD_EXECUTABLE)
+
+############################################################
 
 include $(CLEAR_VARS)
 
@@ -117,4 +123,7 @@ include $(BUILD_EXECUTABLE)
 
 endif  # TARGET_SIMULATOR != true
 
+############################################################
+
 include $(call all-makefiles-under,$(LOCAL_PATH))
+
