@@ -38,7 +38,7 @@
 /* #undef DISABLE_SYSLOG */
 
 /* Disable use of utmp */
-/* #undef DISABLE_UTMP */
+#define DISABLE_UTMP 1
 
 /* Disable use of utmpx */
 #define DISABLE_UTMPX 1

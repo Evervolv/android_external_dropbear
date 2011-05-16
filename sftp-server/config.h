@@ -382,7 +382,7 @@
 #define HAVE_GETCWD 1
 
 /* Define to 1 if you have the `getgrouplist' function. */
-#define HAVE_GETGROUPLIST 1
+/* #define HAVE_GETGROUPLIST 1 */
 
 /* Define to 1 if you have the `getgrset' function. */
 /* #undef HAVE_GETGRSET */
