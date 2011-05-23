@@ -44,9 +44,15 @@
 # $(call add-clean-step, find $(OUT_DIR) -type f -name "IGTalkSession*" -print0 | xargs -0 rm -f)
 # $(call add-clean-step, rm -rf $(PRODUCT_OUT)/data/*)
 
-
 $(call add-clean-step, rm -rf $(PRODUCT_OUT)/obj/EXECUTABLES/ssh_intermediates)
+$(call add-clean-step, rm -rf $(PRODUCT_OUT)/obj/EXECUTABLES/dropbear_intermediates)
+$(call add-clean-step, rm -rf $(PRODUCT_OUT)/obj/EXECUTABLES/dropbearkey_intermediates)
+$(call add-clean-step, rm -rf $(PRODUCT_OUT)/obj/EXECUTABLES/sftp-server_intermediates)
 
+$(call add-clean-step, rm -f $(PRODUCT_OUT)/symbols/system/xbin/ssh)
+$(call add-clean-step, rm -f $(PRODUCT_OUT)/symbols/system/xbin/dropbear)
+$(call add-clean-step, rm -f $(PRODUCT_OUT)/symbols/system/xbin/dropbearkey)
+$(call add-clean-step, rm -f $(PRODUCT_OUT)/symbols/system/xbin/sftp-server)
 
 # ************************************************
 # NEWER CLEAN STEPS MUST BE AT THE END OF THE LIST
