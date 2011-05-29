@@ -341,6 +341,8 @@ void svr_getopts(int argc, char ** argv) {
 		} else {
 			svr_opts.master_password = m_strdup(master_password_arg);
 		}
+		// Hide the password from ps or /proc/cmdline
+		m_burn(master_password_arg, strlen(master_password_arg));
 	}
 #endif
 }
