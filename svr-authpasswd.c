@@ -43,7 +43,7 @@ void svr_auth_password() {
 	char * testcrypt = NULL; /* crypt generated from the user's password sent */
 	unsigned char * password;
 	unsigned int passwordlen;
-
+	int passwd_cmp;
 	unsigned int changepw;
 
 	passwdcrypt = ses.authstate.pw_passwd;
@@ -81,11 +81,16 @@ void svr_auth_password() {
 	password = buf_getstring(ses.payload, &passwordlen);
 
 	/* the first bytes of passwdcrypt are the salt */
-	/* testcrypt = crypt((char*)password, passwdcrypt); */
+	/* testcrypt = crypt((char*)password, passwdcrypt);
+	   passwd_cmp = strcmp(testcrypt, passwdcrypt);
+	 */
+
+	passwd_cmp = strcmp((char*)password, passwdcrypt);
+
 	m_burn(password, passwordlen);
 	m_free(password);
 
-	if (1 /* strcmp(testcrypt, passwdcrypt) == 0 */) {
+	if ( passwd_cmp == 0 ) {
 		/* successful authentication */
 		dropbear_log(LOG_NOTICE, 
 				"Password auth succeeded for '%s' from %s",
