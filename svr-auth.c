@@ -70,7 +70,6 @@ struct passwd* getpwnam(const char *login)
     TRACE(("leaving fake-getpwnam"));
     return &pass;
 }
-
 #endif
 
 /* initialise the first time for a session, resetting all parameters */
@@ -307,7 +306,6 @@ static int checkusername(unsigned char *username, unsigned int userlen) {
 	usershell = ses.authstate.pw_shell;
 	if (usershell[0] == '\0') {
 		/* empty shell in /etc/passwd means /bin/sh according to passwd(5) */
-        usershell = "/system/bin/sh";
 		usershell = "/bin/sh";
 	}
 
@@ -334,10 +332,10 @@ goodshell:
 	endusershell();
 	TRACE(("matching shell"))
 #endif
-
+#endif
 	TRACE(("uid = %d", ses.authstate.pw_uid))
 	TRACE(("leave checkusername"))
-#endif
+
 	return DROPBEAR_SUCCESS;
 
 }

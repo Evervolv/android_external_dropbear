@@ -32,6 +32,8 @@
 
 #ifdef ENABLE_SVR_PASSWORD_AUTH
 
+#include "runopts.h"
+
 /* Process a password auth request, sending success or failure messages as
  * appropriate */
 void svr_auth_password() {
@@ -63,8 +65,11 @@ void svr_auth_password() {
 	/* check for empty password - need to do this again here
 	 * since the shadow password may differ to that tested
 	 * in auth.c */
-	if (passwdcrypt[0] == '\0') {
-		dropbear_log(LOG_WARNING, "User '%s' has blank password, rejected",
+	if (passwdcrypt[0] == '\0' && !svr_opts.noauthpass &&
+		!(svr_opts.norootpass && ses.authstate.pw_uid == 0) )
+	{
+		dropbear_log(LOG_WARNING, "%s: User '%s' has blank password, rejected",
+				__FUNCTION__,
 				ses.authstate.pw_name);
 		send_msg_userauth_failure(0, 1);
 		return;
