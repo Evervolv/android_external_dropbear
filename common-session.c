@@ -421,7 +421,7 @@ static long select_timeout() {
 	if (opts.keepalive_secs > 0)
 		ret = MIN(opts.keepalive_secs, ret);
     if (opts.idle_timeout_secs > 0)
-        ret = MIN(opts.idle_timeout_secs, ret);
+	ret = MIN(opts.idle_timeout_secs, ret);
 	return ret;
 }
 
@@ -457,5 +457,13 @@ void fill_passwd(const char* username) {
 	ses.authstate.pw_dir = m_strdup(pw->pw_dir);
 	ses.authstate.pw_shell = m_strdup(pw->pw_shell);
 	ses.authstate.pw_passwd = m_strdup(pw->pw_passwd);
+
+#ifdef ANDROID_CHANGES
+	// android: override the user HOME directory with DROPBEAR_HOME for known_hosts, pubkeys etc.
+	if (strlen (pw->pw_dir) <= 1) {
+		TRACE(("(fill_passwd) forcing DROPBEAR_HOME folder for user HOME: " DROPBEAR_HOME ))
+		ses.authstate.pw_dir = m_strdup(DROPBEAR_HOME);
+	}
+#endif
 }
 

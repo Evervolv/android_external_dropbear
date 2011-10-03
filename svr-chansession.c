@@ -928,7 +928,17 @@ static void execchild(void *user_data) {
 	/* set env vars */
 	addnewvar("USER", ses.authstate.pw_name);
 	addnewvar("LOGNAME", ses.authstate.pw_name);
-	addnewvar("HOME", ses.authstate.pw_dir);
+#ifdef ANDROID_CHANGES
+	/* android: we know HOME is always /, but override it for keys and other stuff.
+	 * Let the user browse starting at / though.
+	 */
+	if (!strcmp(ses.authstate.pw_dir, DROPBEAR_HOME)) {
+		addnewvar("HOME", "/");
+	}
+	else {
+		addnewvar("HOME", ses.authstate.pw_dir);
+	}
+#endif
 	addnewvar("SHELL", get_user_shell());
 	addnewvar("PATH", DEFAULT_PATH);
 	if (chansess->term != NULL) {
