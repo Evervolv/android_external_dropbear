@@ -91,7 +91,7 @@ void recv_msg_userauth_banner() {
 		}
 	}
 
-	printf("%s\n", banner);
+	fprintf(stderr, "%s\n", banner);
 
 out:
 	m_free(banner);
@@ -229,9 +229,15 @@ void recv_msg_userauth_failure() {
 
 void recv_msg_userauth_success() {
 	TRACE(("received msg_userauth_success"))
+	/* Note: in delayed-zlib mode, setting authdone here 
+	 * will enable compression in the transport layer */
 	ses.authstate.authdone = 1;
 	cli_ses.state = USERAUTH_SUCCESS_RCVD;
 	cli_ses.lastauthtype = AUTH_TYPE_NONE;
+
+#ifdef ENABLE_CLI_PUBKEY_AUTH
+	cli_auth_pubkey_cleanup();
+#endif
 }
 
 void cli_auth_try() {
@@ -284,6 +290,15 @@ void cli_auth_try() {
 char* getpass_or_cancel(char* prompt)
 {
 	char* password = NULL;
+	
+#ifdef DROPBEAR_PASSWORD_ENV
+    /* Password provided in an environment var */
+    password = getenv(DROPBEAR_PASSWORD_ENV);
+    if (password)
+    {
+        return password;
+    }
+#endif
 
 	password = getpass(prompt);
 

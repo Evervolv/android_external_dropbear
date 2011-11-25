@@ -32,6 +32,8 @@
 
 #ifdef ENABLE_SVR_PASSWORD_AUTH
 
+#include "runopts.h"
+
 /* Process a password auth request, sending success or failure messages as
  * appropriate */
 void svr_auth_password() {
@@ -43,13 +45,13 @@ void svr_auth_password() {
 	char * testcrypt = NULL; /* crypt generated from the user's password sent */
 	unsigned char * password;
 	unsigned int passwordlen;
-
+	int passwd_cmp;
 	unsigned int changepw;
 
-	passwdcrypt = ses.authstate.pw->pw_passwd;
+	passwdcrypt = ses.authstate.pw_passwd;
 #ifdef HAVE_SHADOW_H
 	/* get the shadow password if possible */
-	spasswd = getspnam(ses.authstate.printableuser);
+	spasswd = getspnam(ses.authstate.pw_name);
 	if (spasswd != NULL && spasswd->sp_pwdp != NULL) {
 		passwdcrypt = spasswd->sp_pwdp;
 	}
@@ -63,9 +65,12 @@ void svr_auth_password() {
 	/* check for empty password - need to do this again here
 	 * since the shadow password may differ to that tested
 	 * in auth.c */
-	if (passwdcrypt[0] == '\0') {
-		dropbear_log(LOG_WARNING, "user '%s' has blank password, rejected",
-				ses.authstate.printableuser);
+	if (passwdcrypt[0] == '\0' && !svr_opts.noauthpass &&
+		!(svr_opts.norootpass && ses.authstate.pw_uid == 0) )
+	{
+		dropbear_log(LOG_WARNING, "%s: User '%s' has blank password, rejected",
+				__FUNCTION__,
+				ses.authstate.pw_name);
 		send_msg_userauth_failure(0, 1);
 		return;
 	}
@@ -81,21 +86,26 @@ void svr_auth_password() {
 	password = buf_getstring(ses.payload, &passwordlen);
 
 	/* the first bytes of passwdcrypt are the salt */
-	testcrypt = crypt((char*)password, passwdcrypt);
+	/* testcrypt = crypt((char*)password, passwdcrypt);
+	   passwd_cmp = strcmp(testcrypt, passwdcrypt);
+	 */
+
+	passwd_cmp = strcmp((char*)password, passwdcrypt);
+
 	m_burn(password, passwordlen);
 	m_free(password);
 
-	if (strcmp(testcrypt, passwdcrypt) == 0) {
+	if ( passwd_cmp == 0 ) {
 		/* successful authentication */
 		dropbear_log(LOG_NOTICE, 
-				"password auth succeeded for '%s' from %s",
-				ses.authstate.printableuser,
+				"Password auth succeeded for '%s' from %s",
+				ses.authstate.pw_name,
 				svr_ses.addrstring);
 		send_msg_userauth_success();
 	} else {
 		dropbear_log(LOG_WARNING,
-				"bad password attempt for '%s' from %s",
-				ses.authstate.printableuser,
+				"Bad password attempt for '%s' from %s",
+				ses.authstate.pw_name,
 				svr_ses.addrstring);
 		send_msg_userauth_failure(0, 1);
 	}

@@ -33,10 +33,10 @@
 #include "termcodes.h"
 #include "ssh.h"
 #include "random.h"
-#include "utmp.h"
 #include "x11fwd.h"
 #include "agentfwd.h"
 #include "runopts.h"
+#include "auth.h"
 
 /* Handles sessions (either shells or programs) requested by the client */
 
@@ -47,7 +47,7 @@ static int sessionsignal(struct ChanSess *chansess);
 static int noptycommand(struct Channel *channel, struct ChanSess *chansess);
 static int ptycommand(struct Channel *channel, struct ChanSess *chansess);
 static int sessionwinchange(struct ChanSess *chansess);
-static void execchild(struct ChanSess *chansess);
+static void execchild(void *user_data_chansess);
 static void addchildpid(struct ChanSess *chansess, pid_t pid);
 static void sesssigchild_handler(int val);
 static void closechansess(struct Channel *channel);
@@ -221,6 +221,7 @@ static int newchansess(struct Channel *channel) {
 
 	chansess = (struct ChanSess*)m_malloc(sizeof(struct ChanSess));
 	chansess->cmd = NULL;
+	chansess->connection_string = NULL;
 	chansess->pid = 0;
 
 	/* pty details */
@@ -239,7 +240,7 @@ static int newchansess(struct Channel *channel) {
 	chansess->x11authcookie = NULL;
 #endif
 
-#ifndef DISABLE_AGENTFWD
+#ifdef ENABLE_AGENTFWD
 	chansess->agentlistener = NULL;
 	chansess->agentfile = NULL;
 	chansess->agentdir = NULL;
@@ -247,6 +248,14 @@ static int newchansess(struct Channel *channel) {
 
 	return 0;
 
+}
+
+static struct logininfo* 
+chansess_login_alloc(struct ChanSess *chansess) {
+	struct logininfo * li;
+	li = login_alloc_entry(chansess->pid, ses.authstate.username,
+			svr_ses.remotehost, chansess->tty);
+	return li;
 }
 
 /* clean a session channel */
@@ -272,8 +281,7 @@ static void closechansess(struct Channel *channel) {
 
 	if (chansess->tty) {
 		/* write the utmp/wtmp login record */
-		li = login_alloc_entry(chansess->pid, ses.authstate.username,
-				ses.remotehost, chansess->tty);
+		li = chansess_login_alloc(chansess);
 		login_logout(li);
 		login_free_entry(li);
 
@@ -285,8 +293,8 @@ static void closechansess(struct Channel *channel) {
 	x11cleanup(chansess);
 #endif
 
-#ifndef DISABLE_AGENTFWD
-	agentcleanup(chansess);
+#ifdef ENABLE_AGENTFWD
+	svr_agentcleanup(chansess);
 #endif
 
 	/* clear child pid entries */
@@ -343,9 +351,9 @@ static void chansessionrequest(struct Channel *channel) {
 	} else if (strcmp(type, "x11-req") == 0) {
 		ret = x11req(chansess);
 #endif
-#ifndef DISABLE_AGENTFWD
+#ifdef ENABLE_AGENTFWD
 	} else if (strcmp(type, "auth-agent-req@openssh.com") == 0) {
-		ret = agentreq(chansess);
+		ret = svr_agentreq(chansess);
 #endif
 	} else if (strcmp(type, "signal") == 0) {
 		ret = sessionsignal(chansess);
@@ -447,7 +455,7 @@ static void get_termmodes(struct ChanSess *chansess) {
 	TRACE(("term mode str %d p->l %d p->p %d", 
 				len, ses.payload->len , ses.payload->pos));
 	if (len != ses.payload->len - ses.payload->pos) {
-		dropbear_exit("bad term mode string");
+		dropbear_exit("Bad term mode string");
 	}
 
 	if (len == 0) {
@@ -512,7 +520,7 @@ static void get_termmodes(struct ChanSess *chansess) {
 		}
 	}
 	if (tcsetattr(chansess->master, TCSANOW, &termio) < 0) {
-		dropbear_log(LOG_INFO, "error setting terminal attributes");
+		dropbear_log(LOG_INFO, "Error setting terminal attributes");
 	}
 	TRACE(("leave get_termmodes"))
 }
@@ -524,8 +532,15 @@ static int sessionpty(struct ChanSess * chansess) {
 
 	unsigned int termlen;
 	unsigned char namebuf[65];
+	struct passwd * pw = NULL;
 
 	TRACE(("enter sessionpty"))
+
+	if (!svr_pubkey_allows_pty()) {
+		TRACE(("leave sessionpty : pty forbidden by public key option"))
+		return DROPBEAR_FAILURE;
+	}
+
 	chansess->term = buf_getstring(ses.payload, &termlen);
 	if (termlen > MAX_TERM_LEN) {
 		/* TODO send disconnect ? */
@@ -535,7 +550,7 @@ static int sessionpty(struct ChanSess * chansess) {
 
 	/* allocate the pty */
 	if (chansess->master != -1) {
-		dropbear_exit("multiple pty requests");
+		dropbear_exit("Multiple pty requests");
 	}
 	if (pty_allocate(&chansess->master, &chansess->slave, namebuf, 64) == 0) {
 		TRACE(("leave sessionpty: failed to allocate pty"))
@@ -544,10 +559,13 @@ static int sessionpty(struct ChanSess * chansess) {
 	
 	chansess->tty = (char*)m_strdup(namebuf);
 	if (!chansess->tty) {
-		dropbear_exit("out of memory"); /* TODO disconnect */
+		dropbear_exit("Out of memory"); /* TODO disconnect */
 	}
 
-	pty_setowner(ses.authstate.pw, chansess->tty);
+	pw = getpwnam(ses.authstate.pw_name);
+	if (!pw)
+		dropbear_exit("getpwnam failed after succeeding previously");
+	pty_setowner(pw, chansess->tty);
 
 	/* Set up the rows/col counts */
 	sessionwinchange(chansess);
@@ -557,6 +575,21 @@ static int sessionpty(struct ChanSess * chansess) {
 
 	TRACE(("leave sessionpty"))
 	return DROPBEAR_SUCCESS;
+}
+
+static char* make_connection_string() {
+	char *local_ip, *local_port, *remote_ip, *remote_port;
+	size_t len;
+	char *ret;
+	get_socket_address(ses.sock_in, &local_ip, &local_port, &remote_ip, &remote_port, 0);
+	len = strlen(local_ip) + strlen(local_port) + strlen(remote_ip) + strlen(remote_port) + 4;
+	ret = m_malloc(len);
+	snprintf(ret, len, "%s %s %s %s", remote_ip, remote_port, local_ip, local_port);
+	m_free(local_ip);
+	m_free(local_port);
+	m_free(remote_ip);
+	m_free(remote_port);
+	return ret;
 }
 
 /* Handle a command request from the client. This is used for both shell
@@ -580,12 +613,14 @@ static int sessioncommand(struct Channel *channel, struct ChanSess *chansess,
 
 	if (iscmd) {
 		/* "exec" */
-		chansess->cmd = buf_getstring(ses.payload, &cmdlen);
+		if (chansess->cmd == NULL) {
+			chansess->cmd = buf_getstring(ses.payload, &cmdlen);
 
-		if (cmdlen > MAX_CMD_LEN) {
-			m_free(chansess->cmd);
-			/* TODO - send error - too long ? */
-			return DROPBEAR_FAILURE;
+			if (cmdlen > MAX_CMD_LEN) {
+				m_free(chansess->cmd);
+				/* TODO - send error - too long ? */
+				return DROPBEAR_FAILURE;
+			}
 		}
 		if (issubsys) {
 #ifdef SFTPSERVER_PATH
@@ -600,15 +635,24 @@ static int sessioncommand(struct Channel *channel, struct ChanSess *chansess,
 			}
 		}
 	}
+	
+	/* take public key option 'command' into account */
+	svr_pubkey_set_forced_command(chansess);
 
 #ifdef LOG_COMMANDS
 	if (chansess->cmd) {
-		dropbear_log(LOG_INFO, "user %s executing '%s'", 
-						ses.authstate.printableuser, chansess->cmd);
+		dropbear_log(LOG_INFO, "User %s executing '%s'", 
+						ses.authstate.pw_name, chansess->cmd);
 	} else {
-		dropbear_log(LOG_INFO, "user %s executing login shell", 
-						ses.authstate.printableuser);
+		dropbear_log(LOG_INFO, "User %s executing login shell", 
+						ses.authstate.pw_name);
 	}
+#endif
+
+	/* uClinux will vfork(), so there'll be a race as 
+	connection_string is freed below. */
+#ifndef __uClinux__
+	chansess->connection_string = make_connection_string();
 #endif
 
 	if (chansess->term == NULL) {
@@ -618,6 +662,10 @@ static int sessioncommand(struct Channel *channel, struct ChanSess *chansess,
 		/* want pty */
 		ret = ptycommand(channel, chansess);
 	}
+
+#ifndef __uClinux__	
+	m_free(chansess->connection_string);
+#endif
 
 	if (ret == DROPBEAR_FAILURE) {
 		m_free(chansess->cmd);
@@ -629,100 +677,37 @@ static int sessioncommand(struct Channel *channel, struct ChanSess *chansess,
  * pty.
  * Returns DROPBEAR_SUCCESS or DROPBEAR_FAILURE */
 static int noptycommand(struct Channel *channel, struct ChanSess *chansess) {
-
-	int infds[2];
-	int outfds[2];
-	int errfds[2];
-	pid_t pid;
-	unsigned int i;
+	int ret;
 
 	TRACE(("enter noptycommand"))
+	ret = spawn_command(execchild, chansess, 
+			&channel->writefd, &channel->readfd, &channel->errfd,
+			&chansess->pid);
 
-	/* redirect stdin/stdout/stderr */
-	if (pipe(infds) != 0)
-		return DROPBEAR_FAILURE;
-	if (pipe(outfds) != 0)
-		return DROPBEAR_FAILURE;
-	if (pipe(errfds) != 0)
-		return DROPBEAR_FAILURE;
+	if (ret == DROPBEAR_FAILURE) {
+		return ret;
+	}
 
-#ifdef __uClinux__
-	pid = vfork();
-#else
-	pid = fork();
-#endif
+	ses.maxfd = MAX(ses.maxfd, channel->writefd);
+	ses.maxfd = MAX(ses.maxfd, channel->readfd);
+	ses.maxfd = MAX(ses.maxfd, channel->errfd);
 
-	if (pid < 0)
-		return DROPBEAR_FAILURE;
+	addchildpid(chansess, chansess->pid);
 
-	if (!pid) {
-		/* child */
-
-		TRACE(("back to normal sigchld"))
-		/* Revert to normal sigchld handling */
-		if (signal(SIGCHLD, SIG_DFL) == SIG_ERR) {
-			dropbear_exit("signal() error");
-		}
-
-		/* redirect stdin/stdout */
-#define FDIN 0
-#define FDOUT 1
-		if ((dup2(infds[FDIN], STDIN_FILENO) < 0) ||
-			(dup2(outfds[FDOUT], STDOUT_FILENO) < 0) ||
-			(dup2(errfds[FDOUT], STDERR_FILENO) < 0)) {
-			TRACE(("leave noptycommand: error redirecting FDs"))
-			return DROPBEAR_FAILURE;
-		}
-
-		close(infds[FDOUT]);
-		close(infds[FDIN]);
-		close(outfds[FDIN]);
-		close(outfds[FDOUT]);
-		close(errfds[FDIN]);
-		close(errfds[FDOUT]);
-
-		execchild(chansess);
-		/* not reached */
-
-	} else {
-		/* parent */
-		TRACE(("continue noptycommand: parent"))
-		chansess->pid = pid;
-		TRACE(("child pid is %d", pid))
-
-		addchildpid(chansess, pid);
-
-		if (svr_ses.lastexit.exitpid != -1) {
-			TRACE(("parent side: lastexitpid is %d", svr_ses.lastexit.exitpid))
-			/* The child probably exited and the signal handler triggered
-			 * possibly before we got around to adding the childpid. So we fill
-			 * out its data manually */
-			for (i = 0; i < svr_ses.childpidsize; i++) {
-				if (svr_ses.childpids[i].pid == svr_ses.lastexit.exitpid) {
-					TRACE(("found match for lastexitpid"))
-					svr_ses.childpids[i].chansess->exit = svr_ses.lastexit;
-					svr_ses.lastexit.exitpid = -1;
-				}
+	if (svr_ses.lastexit.exitpid != -1) {
+		unsigned int i;
+		TRACE(("parent side: lastexitpid is %d", svr_ses.lastexit.exitpid))
+		/* The child probably exited and the signal handler triggered
+		 * possibly before we got around to adding the childpid. So we fill
+		 * out its data manually */
+		for (i = 0; i < svr_ses.childpidsize; i++) {
+			if (svr_ses.childpids[i].pid == svr_ses.lastexit.exitpid) {
+				TRACE(("found match for lastexitpid"))
+				svr_ses.childpids[i].chansess->exit = svr_ses.lastexit;
+				svr_ses.lastexit.exitpid = -1;
 			}
 		}
-
-		close(infds[FDIN]);
-		close(outfds[FDOUT]);
-		close(errfds[FDOUT]);
-		channel->writefd = infds[FDOUT];
-		channel->readfd = outfds[FDIN];
-		channel->errfd = errfds[FDIN];
-		ses.maxfd = MAX(ses.maxfd, channel->writefd);
-		ses.maxfd = MAX(ses.maxfd, channel->readfd);
-		ses.maxfd = MAX(ses.maxfd, channel->errfd);
-
-		setnonblocking(channel->readfd);
-		setnonblocking(channel->writefd);
-		setnonblocking(channel->errfd);
-
 	}
-#undef FDIN
-#undef FDOUT
 
 	TRACE(("leave noptycommand"))
 	return DROPBEAR_SUCCESS;
@@ -746,7 +731,7 @@ static int ptycommand(struct Channel *channel, struct ChanSess *chansess) {
 
 	/* we need to have a pty allocated */
 	if (chansess->master == -1 || chansess->tty == NULL) {
-		dropbear_log(LOG_WARNING, "no pty was allocated, couldn't execute");
+		dropbear_log(LOG_WARNING, "No pty was allocated, couldn't execute");
 		return DROPBEAR_FAILURE;
 	}
 	
@@ -783,22 +768,19 @@ static int ptycommand(struct Channel *channel, struct ChanSess *chansess) {
 
 		/* write the utmp/wtmp login record - must be after changing the
 		 * terminal used for stdout with the dup2 above */
-		li= login_alloc_entry(getpid(), ses.authstate.username,
-				ses.remotehost, chansess->tty);
+		li = chansess_login_alloc(chansess);
 		login_login(li);
 		login_free_entry(li);
-
-		m_free(chansess->tty);
 
 #ifdef DO_MOTD
 		if (svr_opts.domotd) {
 			/* don't show the motd if ~/.hushlogin exists */
 
-			/* 11 == strlen("/hushlogin\0") */
-			len = strlen(ses.authstate.pw->pw_dir) + 11; 
+			/* 12 == strlen("/.hushlogin\0") */
+			len = strlen(ses.authstate.pw_dir) + 12; 
 
 			hushpath = m_malloc(len);
-			snprintf(hushpath, len, "%s/hushlogin", ses.authstate.pw->pw_dir);
+			snprintf(hushpath, len, "%s/.hushlogin", ses.authstate.pw_dir);
 
 			if (stat(hushpath, &sb) < 0) {
 				/* more than a screenful is stupid IMHO */
@@ -867,12 +849,9 @@ static void addchildpid(struct ChanSess *chansess, pid_t pid) {
 
 /* Clean up, drop to user privileges, set up the environment and execute
  * the command/shell. This function does not return. */
-static void execchild(struct ChanSess *chansess) {
-
-	char *argv[4];
-	char * usershell = NULL;
-	char * baseshell = NULL;
-	unsigned int i;
+static void execchild(void *user_data) {
+	struct ChanSess *chansess = user_data;
+	char *usershell = NULL;
 
     /* with uClinux we'll have vfork()ed, so don't want to overwrite the
      * hostkey. can't think of a workaround to clear it */
@@ -885,11 +864,26 @@ static void execchild(struct ChanSess *chansess) {
 	reseedrandom();
 #endif
 
-	/* close file descriptors except stdin/stdout/stderr
-	 * Need to be sure FDs are closed here to avoid reading files as root */
-	for (i = 3; i <= (unsigned int)ses.maxfd; i++) {
-		m_close(i);
-	}
+#ifdef ANDROID_CHANGES
+    /* save some android-specific environment variables */
+    const char *and_env_name[] = { "ANDROID_ASSETS",
+                                   "ANDROID_BOOTLOGO",
+                                   "ANDROID_DATA",
+                                   "ANDROID_PROPERTY_WORKSPACE",
+                                   "ANDROID_ROOT",
+                                   "BOOTCLASSPATH",
+                                   "EXTERNAL_STORAGE",
+                                   "SD_EXT_DIRECTORY"
+                                 };
+    const int and_env_count = sizeof(and_env_name) / sizeof(*and_env_name);
+    char *and_env_value[and_env_count];
+
+    int i;
+    for (i = 0; i < and_env_count; i++) {
+        char *val = getenv(and_env_name[i]);
+        and_env_value[i] = val ? strdup(val) : NULL;
+    }
+#endif
 
 	/* clear environment */
 	/* if we're debugging using valgrind etc, we need to keep the LD_PRELOAD
@@ -908,13 +902,13 @@ static void execchild(struct ChanSess *chansess) {
 	/* We can only change uid/gid as root ... */
 	if (getuid() == 0) {
 
-		if ((setgid(ses.authstate.pw->pw_gid) < 0) ||
-			(initgroups(ses.authstate.pw->pw_name, 
-						ses.authstate.pw->pw_gid) < 0)) {
-			dropbear_exit("error changing user group");
+		if ((setgid(ses.authstate.pw_gid) < 0) ||
+			(initgroups(ses.authstate.pw_name, 
+						ses.authstate.pw_gid) < 0)) {
+			dropbear_exit("Error changing user group");
 		}
-		if (setuid(ses.authstate.pw->pw_uid) < 0) {
-			dropbear_exit("error changing user");
+		if (setuid(ses.authstate.pw_uid) < 0) {
+			dropbear_exit("Error changing user");
 		}
 	} else {
 		/* ... but if the daemon is the same uid as the requested uid, we don't
@@ -924,70 +918,76 @@ static void execchild(struct ChanSess *chansess) {
 		 * usernames with the same uid, but differing groups, then the
 		 * differing groups won't be set (as with initgroups()). The solution
 		 * is for the sysadmin not to give out the UID twice */
-		if (getuid() != ses.authstate.pw->pw_uid) {
-			dropbear_exit("couldn't	change user as non-root");
+        /** Bigger problem: getuid is broken on Android. 
+		if (getuid() != ses.authstate.pw_uid) {
+			dropbear_exit("Couldn't	change user as non-root");
 		}
-	}
-
-	/* an empty shell should be interpreted as "/bin/sh" */
-	if (ses.authstate.pw->pw_shell[0] == '\0') {
-		usershell = "/bin/sh";
-	} else {
-		usershell = ses.authstate.pw->pw_shell;
+        */
 	}
 
 	/* set env vars */
-	addnewvar("USER", ses.authstate.pw->pw_name);
-	addnewvar("LOGNAME", ses.authstate.pw->pw_name);
-	addnewvar("HOME", ses.authstate.pw->pw_dir);
-	addnewvar("SHELL", usershell);
+	addnewvar("USER", ses.authstate.pw_name);
+	addnewvar("LOGNAME", ses.authstate.pw_name);
+#ifdef ANDROID_CHANGES
+	/* android: we know HOME is always /, but override it for keys and other stuff.
+	 * Let the user browse starting at / though.
+	 */
+	if (!strcmp(ses.authstate.pw_dir, DROPBEAR_HOME)) {
+		addnewvar("HOME", "/");
+	}
+	else {
+		addnewvar("HOME", ses.authstate.pw_dir);
+	}
+#endif
+	addnewvar("SHELL", get_user_shell());
+	addnewvar("PATH", DEFAULT_PATH);
 	if (chansess->term != NULL) {
 		addnewvar("TERM", chansess->term);
 	}
+#ifdef ANDROID_CHANGES
+    for (i = 0; i < and_env_count; i++) {
+        if (and_env_value[i]) {
+            addnewvar(and_env_name[i], and_env_value[i]);
+            free(and_env_value[i]);
+        }
+     }
+#endif
+
+	if (chansess->tty) {
+		addnewvar("SSH_TTY", chansess->tty);
+	}
+	
+	if (chansess->connection_string) {
+		addnewvar("SSH_CONNECTION", chansess->connection_string);
+	}
+	
+#ifdef ENABLE_SVR_PUBKEY_OPTIONS
+	if (ses.authstate.pubkey_options &&
+			ses.authstate.pubkey_options->original_command) {
+		addnewvar("SSH_ORIGINAL_COMMAND", 
+			ses.authstate.pubkey_options->original_command);
+	}
+#endif
 
 	/* change directory */
-	if (chdir(ses.authstate.pw->pw_dir) < 0) {
-		dropbear_exit("error changing directory");
+	if (chdir(ses.authstate.pw_dir) < 0) {
+		dropbear_exit("Error changing directory");
 	}
 
 #ifndef DISABLE_X11FWD
 	/* set up X11 forwarding if enabled */
 	x11setauth(chansess);
 #endif
-#ifndef DISABLE_AGENTFWD
+#ifdef ENABLE_AGENTFWD
 	/* set up agent env variable */
-	agentset(chansess);
+	svr_agentset(chansess);
 #endif
 
-	/* Re-enable SIGPIPE for the executed process */
-	if (signal(SIGPIPE, SIG_DFL) == SIG_ERR) {
-		dropbear_exit("signal() error");
-	}
-
-	baseshell = basename(usershell);
-
-	if (chansess->cmd != NULL) {
-		argv[0] = baseshell;
-	} else {
-		/* a login shell should be "-bash" for "/bin/bash" etc */
-		int len = strlen(baseshell) + 2; /* 2 for "-" */
-		argv[0] = (char*)m_malloc(len);
-		snprintf(argv[0], len, "-%s", baseshell);
-	}
-
-	if (chansess->cmd != NULL) {
-		argv[1] = "-c";
-		argv[2] = chansess->cmd;
-		argv[3] = NULL;
-	} else {
-		/* construct a shell of the form "-bash" etc */
-		argv[1] = NULL;
-	}
-
-	execv(usershell, argv);
+	usershell = m_strdup(get_user_shell());
+	run_shell_command(chansess->cmd, ses.maxfd, usershell);
 
 	/* only reached on error */
-	dropbear_exit("child failed");
+	dropbear_exit("Child failed");
 }
 
 const struct ChanType svrchansess = {

@@ -126,7 +126,7 @@ static void ask_to_confirm(unsigned char* keyblob, unsigned int keybloblen) {
 		m_free(fp);
 		return;
 	}
-	fprintf(stderr, "\nHost '%s' is not in the trusted hosts file.\n(fingerprint %s)\nDo you want to continue connecting? (y/n)\n", 
+	fprintf(stderr, "\nHost '%s' is not in the trusted hosts file.\n(fingerprint %s)\nDo you want to continue connecting? (y/n) ", 
 			cli_opts.remotehost, 
 			fp);
 	m_free(fp);
@@ -159,6 +159,12 @@ static FILE* open_known_hosts_file(int * readonly)
 		pw = getpwuid(getuid());
 		if (pw) {
 			homedir = pw->pw_dir;
+#ifdef ANDROID_CHANGES
+			if (strlen(homedir) <= 1) {
+				TRACE(("(hosts_file) forcing DROPBEAR_HOME folder for user .ssh: " DROPBEAR_HOME ))
+				homedir = DROPBEAR_HOME;
+			}
+#endif
 		}
 	}
 
@@ -304,7 +310,7 @@ static void checkhostkey(unsigned char* keyblob, unsigned int keybloblen) {
 		fseek(hostsfile, 0, SEEK_END); /* In case it wasn't opened append */
 		buf_setpos(line, 0);
 		buf_setlen(line, 0);
-		buf_putbytes(line, ses.remotehost, hostlen);
+		buf_putbytes(line, cli_opts.remotehost, hostlen);
 		buf_putbyte(line, ' ');
 		buf_putbytes(line, algoname, algolen);
 		buf_putbyte(line, ' ');
@@ -327,4 +333,5 @@ out:
 	if (line != NULL) {
 		buf_free(line);
 	}
+	m_free(fingerprint);
 }

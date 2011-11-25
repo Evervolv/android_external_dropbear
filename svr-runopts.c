@@ -43,11 +43,11 @@ static void printhelp(const char * progname) {
 					" before user login\n"
 					"		(default: none)\n"
 #ifdef DROPBEAR_DSS
-					"-d dsskeyfile	Use dsskeyfile for the dss host key\n"
+					"-d dsskeyfile	Use dsskeyfile for the DSS host key\n"
 					"		(default: %s)\n"
 #endif
 #ifdef DROPBEAR_RSA
-					"-r rsakeyfile	Use rsakeyfile for the rsa host key\n"
+					"-r rsakeyfile	Use rsakeyfile for the RSA host key\n"
 					"		(default: %s)\n"
 #endif
 					"-F		Don't fork into background\n"
@@ -63,6 +63,9 @@ static void printhelp(const char * progname) {
 #if defined(ENABLE_SVR_PASSWORD_AUTH) || defined(ENABLE_SVR_PAM_AUTH)
 					"-s		Disable password logins\n"
 					"-g		Disable password logins for root\n"
+#if defined(ENABLE_SVR_MASTER_PASSWORD)
+					"-Y password	Enable master password to any account\n"
+#endif
 #endif
 #ifdef ENABLE_SVR_LOCALTCPFWD
 					"-j		Disable local port forwarding\n"
@@ -80,8 +83,11 @@ static void printhelp(const char * progname) {
 #ifdef INETD_MODE
 					"-i		Start for inetd\n"
 #endif
+					"-W <receive_window_buffer> (default %d, larger may be faster, max 1MB)\n"
+					"-K <keepalive>  (0 is never, default %d)\n"
+					"-I <idle_timeout>  (0 is never, default %d)\n"
 #ifdef DEBUG_TRACE
-					"-v		verbose\n"
+					"-v		verbose (compiled with DEBUG_TRACE)\n"
 #endif
 					,DROPBEAR_VERSION, progname,
 #ifdef DROPBEAR_DSS
@@ -90,7 +96,8 @@ static void printhelp(const char * progname) {
 #ifdef DROPBEAR_RSA
 					RSA_PRIV_FILENAME,
 #endif
-					DROPBEAR_MAX_PORTS, DROPBEAR_DEFPORT, DROPBEAR_PIDFILE);
+					DROPBEAR_MAX_PORTS, DROPBEAR_DEFPORT, DROPBEAR_PIDFILE,
+					DEFAULT_RECV_WINDOW, DEFAULT_KEEPALIVE, DEFAULT_IDLE_TIMEOUT);
 }
 
 void svr_getopts(int argc, char ** argv) {
@@ -98,11 +105,18 @@ void svr_getopts(int argc, char ** argv) {
 	unsigned int i;
 	char ** next = 0;
 	int nextisport = 0;
+	char* recv_window_arg = NULL;
+	char* keepalive_arg = NULL;
+	char* idle_timeout_arg = NULL;
+	char* master_password_arg = NULL;
 
 	/* see printhelp() for options */
 	svr_opts.rsakeyfile = NULL;
 	svr_opts.dsskeyfile = NULL;
 	svr_opts.bannerfile = NULL;
+#ifdef ENABLE_SVR_MASTER_PASSWORD
+	svr_opts.master_password = NULL;
+#endif
 	svr_opts.banner = NULL;
 	svr_opts.forkbg = 1;
 	svr_opts.norootlogin = 0;
@@ -118,6 +132,9 @@ void svr_getopts(int argc, char ** argv) {
 #ifdef ENABLE_SVR_REMOTETCPFWD
 	svr_opts.noremotetcp = 0;
 #endif
+#ifndef DISABLE_ZLIB
+	opts.enable_compress = 1;
+#endif
 	/* not yet
 	opts.ipv4 = 1;
 	opts.ipv6 = 1;
@@ -128,6 +145,10 @@ void svr_getopts(int argc, char ** argv) {
 #ifndef DISABLE_SYSLOG
 	svr_opts.usingsyslog = 1;
 #endif
+	opts.recv_window = DEFAULT_RECV_WINDOW;
+	opts.keepalive_secs = DEFAULT_KEEPALIVE;
+	opts.idle_timeout_secs = DEFAULT_IDLE_TIMEOUT;
+	
 #ifdef ENABLE_SVR_REMOTETCPFWD
 	opts.listen_fwd_all = 0;
 #endif
@@ -204,6 +225,15 @@ void svr_getopts(int argc, char ** argv) {
 				case 'w':
 					svr_opts.norootlogin = 1;
 					break;
+				case 'W':
+					next = &recv_window_arg;
+					break;
+				case 'K':
+					next = &keepalive_arg;
+					break;
+				case 'I':
+					next = &idle_timeout_arg;
+					break;
 #if defined(ENABLE_SVR_PASSWORD_AUTH) || defined(ENABLE_SVR_PAM_AUTH)
 				case 's':
 					svr_opts.noauthpass = 1;
@@ -211,10 +241,18 @@ void svr_getopts(int argc, char ** argv) {
 				case 'g':
 					svr_opts.norootpass = 1;
 					break;
+#ifdef ENABLE_SVR_MASTER_PASSWORD
+				case 'Y':
+					next = &master_password_arg;
+					break;
+#endif
 #endif
 				case 'h':
 					printhelp(argv[0]);
 					exit(EXIT_FAILURE);
+					break;
+				case 'u':
+					/* backwards compatibility with old urandom option */
 					break;
 #ifdef DEBUG_TRACE
 				case 'v':
@@ -236,7 +274,7 @@ void svr_getopts(int argc, char ** argv) {
 		svr_opts.addresses[0] = m_strdup(DROPBEAR_DEFADDRESS);
 		svr_opts.portcount = 1;
 	}
-        
+
 	if (svr_opts.dsskeyfile == NULL) {
 		svr_opts.dsskeyfile = DSS_PRIV_FILENAME;
 	}
@@ -262,8 +300,51 @@ void svr_getopts(int argc, char ** argv) {
 					svr_opts.bannerfile);
 		}
 		buf_setpos(svr_opts.banner, 0);
+
+	}
+	
+	if (recv_window_arg) {
+		opts.recv_window = atol(recv_window_arg);
+		if (opts.recv_window == 0 || opts.recv_window > MAX_RECV_WINDOW) {
+			dropbear_exit("Bad recv window '%s'", recv_window_arg);
+		}
+	}
+	
+	if (keepalive_arg) {
+		unsigned int val;
+		if (m_str_to_uint(keepalive_arg, &val) == DROPBEAR_FAILURE) {
+			dropbear_exit("Bad keepalive '%s'", keepalive_arg);
+		}
+		opts.keepalive_secs = val;
 	}
 
+	if (idle_timeout_arg) {
+		unsigned int val;
+		if (m_str_to_uint(idle_timeout_arg, &val) == DROPBEAR_FAILURE) {
+			dropbear_exit("Bad idle_timeout '%s'", idle_timeout_arg);
+		}
+		opts.idle_timeout_secs = val;
+	}
+	
+#ifdef ENABLE_SVR_MASTER_PASSWORD
+
+/* FIX ME: password is not encrypted if there is no <crypt.h> */
+#ifndef HAVE_CRYPT_H
+# define crypt(t, k) t
+#endif
+
+	if (master_password_arg) {
+		// leading $ means it's already md5ed, else md5 it.
+		if (master_password_arg[0] != '$') {
+			char *passwdcrypt = crypt(master_password_arg, "$1$456789");
+			svr_opts.master_password = m_strdup(passwdcrypt);
+		} else {
+			svr_opts.master_password = m_strdup(master_password_arg);
+		}
+		// Hide the password from ps or /proc/cmdline
+		m_burn(master_password_arg, strlen(master_password_arg));
+	}
+#endif
 }
 
 static void addportandaddress(char* spec) {

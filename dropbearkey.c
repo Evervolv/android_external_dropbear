@@ -23,7 +23,7 @@
  * SOFTWARE. */
 
 /* The format of the keyfiles is basically a raw dump of the buffer. Data types
- * are specified in the transport draft - string is a 32-bit len then the
+ * are specified in the transport rfc 4253 - string is a 32-bit len then the
  * non-null-terminated string, mp_int is a 32-bit len then the bignum data.
  * The actual functions are buf_put_rsa_priv_key() and buf_put_dss_priv_key()
 
@@ -75,6 +75,7 @@ static void printhelp(char * progname) {
 #endif
 					"-f filename	Use filename for the secret key\n"
 					"-s bits	Key size in bits, should be a multiple of 8 (optional)\n"
+					"           (DSS has a fixed size of 1024 bits)\n"
 					"-y		Just print the publickey and fingerprint for the\n		private key in <filename>.\n"
 #ifdef DEBUG_TRACE
 					"-v		verbose\n"
@@ -187,8 +188,11 @@ int main(int argc, char ** argv) {
 			fprintf(stderr, "Bits must be an integer\n");
 			exit(EXIT_FAILURE);
 		}
-	
-		if (bits < 512 || bits > 4096 || (bits % 8 != 0)) {
+		
+		if (keytype == DROPBEAR_SIGNKEY_DSS && bits != 1024) {
+			fprintf(stderr, "DSS keys have a fixed size of 1024 bits\n");
+			exit(EXIT_FAILURE);			
+		} else if (bits < 512 || bits > 4096 || (bits % 8 != 0)) {
 			fprintf(stderr, "Bits must satisfy 512 <= bits <= 4096, and be a"
 					" multiple of 8\n");
 			exit(EXIT_FAILURE);

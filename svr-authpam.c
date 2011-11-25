@@ -101,8 +101,9 @@ pamConvFunc(int num_msg,
 			if (!(strcmp(compare_message, "password:") == 0)) {
 				/* We don't recognise the prompt as asking for a password,
 				   so can't handle it. Add more above as required for
-				   different pam modules/implementations */
-				dropbear_log(LOG_NOTICE, "PAM unknown prompt %s (no echo)",
+				   different pam modules/implementations. If you need
+				   to add an entry here please mail the Dropbear developer */
+				dropbear_log(LOG_NOTICE, "PAM unknown prompt '%s' (no echo)",
 						compare_message);
 				rc = PAM_CONV_ERR;
 				break;
@@ -123,12 +124,16 @@ pamConvFunc(int num_msg,
 
 		case PAM_PROMPT_ECHO_ON:
 
-			if (!((strcmp(compare_message, "login:" ) == 0) 
-				|| (strcmp(compare_message, "please enter username:") == 0))) {
+			if (!(
+				(strcmp(compare_message, "login:" ) == 0) 
+				|| (strcmp(compare_message, "please enter username:") == 0)
+				|| (strcmp(compare_message, "username:") == 0)
+				)) {
 				/* We don't recognise the prompt as asking for a username,
 				   so can't handle it. Add more above as required for
-				   different pam modules/implementations */
-				dropbear_log(LOG_NOTICE, "PAM unknown prompt %s (with echo)",
+				   different pam modules/implementations. If you need
+				   to add an entry here please mail the Dropbear developer */
+				dropbear_log(LOG_NOTICE, "PAM unknown prompt '%s' (with echo)",
 						compare_message);
 				rc = PAM_CONV_ERR;
 				break;
@@ -195,7 +200,7 @@ void svr_auth_pam() {
 	/* used to pass data to the PAM conversation function - don't bother with
 	 * strdup() etc since these are touched only by our own conversation
 	 * function (above) which takes care of it */
-	userData.user = ses.authstate.printableuser;
+	userData.user = ses.authstate.pw_name;
 	userData.passwd = password;
 
 	/* Init pam */
@@ -212,7 +217,10 @@ void svr_auth_pam() {
 		goto cleanup;
 	}
 
+#ifdef HAVE_PAM_FAIL_DELAY
+	/* We have our own random delay code already, disable PAM's */
 	(void) pam_fail_delay(pamHandlep, 0 /* musec_delay */);
+#endif
 
 	/* (void) pam_set_item(pamHandlep, PAM_FAIL_DELAY, (void*) pamDelayFunc); */
 
@@ -220,8 +228,8 @@ void svr_auth_pam() {
 		dropbear_log(LOG_WARNING, "pam_authenticate() failed, rc=%d, %s\n", 
 				rc, pam_strerror(pamHandlep, rc));
 		dropbear_log(LOG_WARNING,
-				"bad PAM password attempt for '%s' from %s",
-				ses.authstate.printableuser,
+				"Bad PAM password attempt for '%s' from %s",
+				ses.authstate.pw_name,
 				svr_ses.addrstring);
 		send_msg_userauth_failure(0, 1);
 		goto cleanup;
@@ -231,8 +239,8 @@ void svr_auth_pam() {
 		dropbear_log(LOG_WARNING, "pam_acct_mgmt() failed, rc=%d, %s\n", 
 				rc, pam_strerror(pamHandlep, rc));
 		dropbear_log(LOG_WARNING,
-				"bad PAM password attempt for '%s' from %s",
-				ses.authstate.printableuser,
+				"Bad PAM password attempt for '%s' from %s",
+				ses.authstate.pw_name,
 				svr_ses.addrstring);
 		send_msg_userauth_failure(0, 1);
 		goto cleanup;
@@ -240,7 +248,7 @@ void svr_auth_pam() {
 
 	/* successful authentication */
 	dropbear_log(LOG_NOTICE, "PAM password auth succeeded for '%s' from %s",
-			ses.authstate.printableuser,
+			ses.authstate.pw_name,
 			svr_ses.addrstring);
 	send_msg_userauth_success();
 

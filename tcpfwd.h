@@ -25,6 +25,7 @@
 #define _TCPFWD_H
 
 #include "channel.h"
+#include "list.h"
 
 struct TCPListener {
 
@@ -43,27 +44,29 @@ struct TCPListener {
 	enum {direct, forwarded} tcp_type;
 };
 
-/* A link in a list of forwards */
-struct TCPFwdList {
-
+/* A forwarding entry */
+struct TCPFwdEntry {
 	const unsigned char* connectaddr;
 	unsigned int connectport;
+	const unsigned char* listenaddr;
 	unsigned int listenport;
-	struct TCPFwdList * next;
-
+	unsigned int have_reply; /* is set to 1 after a reply has been received
+								when setting up the forwarding */
 };
 
 /* Server */
 void recv_msg_global_request_remotetcp();
+
 extern const struct ChanType svr_chan_tcpdirect;
 
 /* Client */
 void setup_localtcp();
 void setup_remotetcp();
 extern const struct ChanType cli_chan_tcpremote;
+void cli_recv_msg_request_success();
+void cli_recv_msg_request_failure();
 
 /* Common */
 int listen_tcpfwd(struct TCPListener* tcpinfo);
-
 
 #endif

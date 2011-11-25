@@ -157,6 +157,7 @@
 #include "loginrec.h"
 #include "dbutil.h"
 #include "atomicio.h"
+#define DEAD_PROCESS 8
 
 /**
  ** prototypes for helper functions in this file
@@ -679,6 +680,8 @@ utmp_write_library(struct logininfo *li, struct utmp *ut)
 static int
 utmp_write_direct(struct logininfo *li, struct utmp *ut)
 {
+	return 1;
+#if 0
 	struct utmp old_ut;
 	register int fd;
 	int tty;
@@ -732,6 +735,7 @@ utmp_write_direct(struct logininfo *li, struct utmp *ut)
 	} else {
 		return 0;
 	}
+#endif
 }
 # endif /* UTMP_USE_LIBRARY */
 
@@ -1334,7 +1338,7 @@ lastlog_openseek(struct logininfo *li, int *fd, int filemode)
 			return 0;
 	}
 
-	*fd = open(lastlog_file, filemode);
+	*fd = open(lastlog_file, filemode, 0600);
 	if ( *fd < 0) {
 		dropbear_log(LOG_INFO, "lastlog_openseek: Couldn't open %s: %s",
 		    lastlog_file, strerror(errno));
